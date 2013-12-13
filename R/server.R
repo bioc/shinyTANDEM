@@ -1,6 +1,4 @@
-options(shiny.maxRequestSize=1024^3)
-
-shinyServer( function(input, output, session) {
+shinyTandemServer <- function(input, output, session) {
 
   rv <- reactiveValues()
 
@@ -28,17 +26,17 @@ shinyServer( function(input, output, session) {
         return(NULL)
       }
 
-      ## TO-DO: put this in a try-catch to recuperate the error messages yielded if the format is not recognized.
-
+      ## TO-DO: put this in a try-catch to recuperate the error messages
+      ## yielded if the format is not recognized.
       progressRDS <- Progress$new(session, min=0, max=1)
       on.exit(progressRDS$close())
       progressRDS$set(message="Loading RDS file into memory.", value=NULL)
       
       temp <- isolate(readRDS(file=input$resultRDS$datapath))
 
-      if(! "rTResult" %in% class(temp)) {
+      if(! is(temp, "rTResult")) {
         rv$loadStateIndicator <-
-          paste("\"",input$resultRDS$name,"\"","is not a result object.", sep="")
+          paste("\"",input$resultRDS$name,"\""," is not a result object.", sep="")
         return(NULL)
       }
       
@@ -84,12 +82,9 @@ shinyServer( function(input, output, session) {
 
   ### Load result from R session:
   loadedResultSession <- reactive({
-    filename <- tempfile("sessionDataset.Rds")
-    filename <- gsub("sessionDataset.Rds.*", "sessionDataset.Rds", filename)
-    if ( file.access(filename, mode=0) == 0 ) {
-      tmp <- readRDS(filename)
+    if (! is.null(dataset)) {
       rv$loadedDataset <-"The dataset was successfully loaded while starting the shiny server"
-      return(tmp)
+      return(dataset)
     }
   })
      
@@ -128,7 +123,6 @@ shinyServer( function(input, output, session) {
   ### Result overview section
   #######
   output$overviewAnalysis <- renderText({
-
     if( is.null(rv$result)) {
       return("Warning: A dataset must be loaded to access analysis overview")
     }
@@ -192,7 +186,7 @@ shinyServer( function(input, output, session) {
       return("Warning: A dataset must be loaded to obtain a choice of identified proteins")
     }
     prots <- subset(rv$result@proteins, expect.value < input$maxExpectProt &
-                    num.peptides > input$minPepNum & like(label, input$protDescFilter))
+                    num.peptides >= input$minPepNum & like(label, input$protDescFilter))
     prots <- prots[,label]
     selectInput("protSelected", label="Choose a protein:",
                        choices=prots, multiple=TRUE)
@@ -264,33 +258,225 @@ shinyServer( function(input, output, session) {
     sequence2 <- paste(seqVec, sep="")
     HTML(sequence2)
   })
+
+  ######
+  ## Stats section.
+  ######
   
-  output$mainSection <- renderUI({
-    if(!is.null(input$section)) {    
-      if(input$section == "home"){
-        home.main()
-      } else if (input$section == "params"){
-        #.main()
-      } else if (input$section == "convert"){
-        convert.main(input$cbId)
-      } else if (input$section == "load"){
-        load.main()
-      } else if (input$section == "overview"){
-        overview.main()
-      } else if (input$section == "stats"){
-        stats.main()
-      } else if (input$section == "prots"){
-        prots.main()
-      } else if (input$section == "peps"){
-        peps.main()
-      } else if (input$section == "external"){
-        external.main()
-      } else if (input$section == "biomart"){
-        biomart.main()
-      } else if (input$section == "gominer"){
-        gominer.main()
-      }
+  output$protExpect <- renderPlot({
+
+    if (is.null(rv$result)) { return(invisible(NULL)) }
+    prot.e <- sort(-(rv$result@proteins$expect.value), decreasing=TRUE)
+    spm.e <- sort(-log10(rv$result@peptides$expect.value), decreasing=TRUE)
+
+    xaxis <- max(length(prot.e), length(spm.e))
+    yaxis <- max(max(prot.e), max(spm.e))
+    plot(
+      prot.e,
+      type="l", lwd=1.5,
+      xlim=c(0,xaxis),
+      ylim=c(0,yaxis),
+      xlab="Number of IDs",
+      ylab="-log10(expectation value)",
+      col="blue")
+    points(spm.e, col="red", type="l")
+    max.expect <- 0.01
+
+    if (! is.na(rv$result@used.parameters$`output, maximum valid expectation value`)){
+      max.expect <- as.numeric(rv$result@used.parameters$`output, maximum valid expectation value`)
     }
-  }) ## /output$mainSection
-}) ##/shinyServer
+    abline(col="green", h=-log10(max.expect))
+
+    legend("topright",
+      legend=c("Protein IDs", "Peptide-spectrum match", "Highest acceptable expectation value\n(as defined in search parameters)"),
+      fill=c("red", "blue", "green"), bty="n"
+    )
+  })
+  
+   output$chargeDisUI<- renderUI({
+    if (is.null(rv$result)) { return(invisible(NULL)) }
+    tabs <- list()
+    ## Find the charges for which there are at least 3 spectra.
+    charges <- table(rv$result@peptides$spectrum.z)
+    charges <- names(charges)[charges>2]
+    for(i in charges){
+      tabTitle <- paste("charge +", i, sep="")
+      plotId <- paste("charge", i, sep="")
+      tabs <- c(tabs,
+        list(
+          tabPanel(title=tabTitle,
+            plotOutput(outputId=plotId))
+        )
+      )
+     }
+     warning(tabs)
+     do.call(tabsetPanel,tabs)
+   })
+
+  output$charge1 <- renderPlot({
+    plotChargeDis(1)
+  })
+  output$charge2 <- renderPlot({
+    plotChargeDis(2)
+  })
+  output$charge3 <- renderPlot({
+    plotChargeDis(3)
+  })
+  output$charge4 <- renderPlot({
+    plotChargeDis(4)
+  })
+  output$charge5 <- renderPlot({
+    plotChargeDis(5)
+  })
+
+
+  plotChargeDis <- function(x) {
+    if (is.null(rv$result)) { return(invisible(NULL)) }
+    charges <- rv$result@peptides[spectrum.z==x, expect.value]
+    charges <- -log10(charges)
+    plot(normalmixEM(charges), which=2, xlab2="-Log10(expectation value)")
+    lines(density(charges), col="blue", lty=2)
+    legend("topright",
+      fill=c("red", "green", "blue"),
+      legend=c("First fitted distribution", "Second fitted distribution", "Total distribution"),
+      y.intersp=1.1,
+      bty="n"
+    )
+  }
+
+
+  #########
+  ## Peptide view section
+  #########
+
+  output$pepProtFilter <- renderUI({
+    if(is.null(rv$result)){
+      return("Warning: A dataset must be loaded to filter peptides by protein")
+    }
+    selectInput("associatedProt", label="Choose by protein:",
+                choices=c("No Filter", rv$result@proteins[,label]),
+                selected="No Filter",
+                multiple=FALSE
+    )
+  })
+
+  output$pepPTMFilter <- renderUI({
+    if(is.null(rv$result)){
+      return("Warning: A dataset must be loaded to filter peptides by PTM")
+    }
+    choices.ptm <- subset(rv$result@ptm, select=c(type,modified))
+    choices.ptm <- apply(choices.ptm, 1, paste, collapse=":")
+    choices.ptm <- c("No Filter", unique(choices.ptm))
+    selectInput("associatedPTM", label="Choose by PTM:",
+                choices=choices.ptm,
+                multiple=FALSE,
+                selected="No Filter"
+    )
+  })
+
+  ## peptide selection dynamic ui
+  output$pepSelection <- renderUI({
+    if(is.null(rv$result)){
+      return("Warning: A dataset must be loaded to select peptide.")
+    }
+    pep.subset <- rv$result@peptides
+    
+    ## filter by ptm if one is chosen
+    if( !is.null(input$associatedPTM) && input$associatedPTM != "No Filter"){
+      chosen.type <- strsplit(input$associatedPTM, ":")[[1]][[1]]
+      chosen.modified <- strsplit(input$associatedPTM,":")[[1]][[2]]
+      chosen.modified <- as.numeric(chosen.modified) # fix problem with leading space
+      ptm.subset <- subset(rv$result@ptm, type==chosen.type & modified==chosen.modified, select=pep.id)
+      pep.subset <- subset(pep.subset, pep.id %in% ptm.subset[,pep.id])
+    }
+    
+    # filter by protein if one is chosen
+    if( !is.null(input$associatedProt) && input$associatedProt != "No Filter") {
+      chosen.uid <- subset(rv$result@proteins, label==input$associatedProt, select=uid)[[1]]
+      pep.subset <- subset(pep.subset, prot.uid==chosen.uid)
+    }
+    # Filter by sequence
+    pep.subset <- subset(pep.subset, like(sequence, input$pepSeqFilter))
+    pep.subset <- pep.subset[order(sequence)]
+    pep.subset <- unique(pep.subset[,sequence])
+    
+    selectInput("pepSelected", label="Choose a peptide:",
+                choices=pep.subset, multiple=TRUE)
+  })
+
+  output$tableSelectedPep <- renderText({
+    if ( is.null(rv$result)){
+      return("A dataset must be loaded to see selected peptides.")
+    }
+    if ( is.null(input$pepSelected) ){
+      return("A peptide must be selected")
+    }
+    
+    pep.ids <- rv$result@peptides[sequence==input$pepSelected[[1]], 2, with=FALSE]
+    PTMs <- sapply(pep.ids[[1]], function(x){
+      ptm.subset<- subset(rv$result@ptm, pep.id==x, select=c(at, type, modified))
+      paste(apply(ptm.subset,1,paste,collapse=" "), collapse="; ")
+    })
+    tableAsHTML(cbind(
+      rv$result@peptides[sequence==input$pepSelected[[1]], c(2,1,3,4,5,6,7,9,10,11,12,14,15,16), with=FALSE],
+      PTMs
+      )
+    ) 
+  })
+  
+  output$tableAssociatedProt <- renderText({
+    if(is.null(rv$result)){
+      return("Warning: A peptide must be selected to see associated proteins")
+    }
+    if ( is.null(input$pepSelected) ){
+      return("A peptide must be selected")
+    }
+    prot.uids <- rv$result@peptides[sequence==input$pepSelected[[1]], 1, with=FALSE][[1]]
+    tableAsHTML(rv$result@proteins[uid %in% prot.uids, c(1,2,3,6,7), with=FALSE])
+  })
+
+#  output$theorSpectra <- renderUI({
+#    ### placeholder for theoretical spectra
+#  })
+
+  output$ms2Spectra <- renderUI({
+    if(is.null(rv$result)){
+      return("Warning: A dataset must be loaded.")
+    }
+    if( is.null(input$pepSelected) ) {
+      return("A peptide must be selected.")
+    }
+    spectra <- subset(rv$result@peptides,
+                      sequence==input$pepSelected,
+                      select=spectrum.id)[[1]]
+    spectra <- unique(spectra)
+    # Generate a tabset with arbitrary number of panels
+    spectra.tabs <-
+      lapply(1:length(spectra),
+        function(i){tabPanel(
+          title=spectra[i], plotOutput(paste("spectra", i, sep="")))
+        }
+      )
+    do.call(tabsetPanel, spectra.tabs)
+
+  })
+
+  ### Generate arbitrary number of ouput$spectra# variables.
+  ### To Do: Find a way to bypass the 'eval(parse(paste...)))' syntax
+  observe({
+    spectra <- NULL
+    if( ! is.null(input$pepSelected) ){
+      spectra <- unique(subset(rv$result@peptides,
+                               sequence==input$pepSelected,
+                               select=spectrum.id)[[1]])
+    }
+    for( i in 1:length(spectra)){
+      var.name <- paste("output$spectra", i, sep="")
+      eval(parse(text=
+        paste(var.name, " <- renderPlot(ms2.plot(", spectra[[i]], ", rv$result))")))
+      ## The command evaluated should look like:
+      ## output$spectra1 <- renderPlot(ms2.plot(spectra, rv$result))
+    }
+  })
  
+} ##/shinyServer
