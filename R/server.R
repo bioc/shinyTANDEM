@@ -8,47 +8,52 @@ shinyTandemServer <- function(input, output, session) {
 
   ### Load result from RDS
   loadedResultRDS <- reactive({
-    if( input$loadFromRDS > 0) {
-
+    if( input$loadFromRDS > 0) isolate({
       rv$loadStateIndicator <- NULL
-
-      ### Test if file was uploaded:
-      if( ! "data.frame" %in% class(input$resultRDS) ) {
-      rv$loadStateIndicator <-
-        "You must upload a file before loading it into memory"
-      return(NULL)
-      }
       
-      ### Catch error if file cannot be read.
-      if( file.access( isolate(input$resultRDS$datapath), mode=4) == -1 ){
+      if( ! "data.frame" %in% class(input$resultRDS) ) {
         rv$loadStateIndicator <-
-          paste("File: \"", isolate(input$resultRDS$name),"\" cannot be read.")
+          "You must upload a file before loading it into memory"
         return(NULL)
       }
 
-      ## TO-DO: put this in a try-catch to recuperate the error messages
-      ## yielded if the format is not recognized.
-      progressRDS <- Progress$new(session, min=0, max=1)
-      on.exit(progressRDS$close())
-      progressRDS$set(message="Loading RDS file into memory.", value=NULL)
-      
-      temp <- isolate(readRDS(file=input$resultRDS$datapath))
+      temp <- tryCatch(
+        expr={
+          readRDS(file=input$resultRDS$datapath)
+        },
+        warning=function(w) {
+          rv$loadStateIndicator <-
+            paste("Problem with file: \"", input$resultRDS$name, "\" :", w)
+          return(NULL)
+        },
+        error=function(e) {
+          rv$loadStateIndicator <-
+            paste("Problem with file: \"", input$resultRDS$name, "\" :", e)
+          return(NULL)
+        }
+      )
+      if( is.null(temp) ) {return(NULL)}
 
+ ### TO DO: implement a progress message for loading time.       
+ #     progressRDS <- Progress$new(session, min=0, max=1)
+ #     on.exit(progressRDS$close())
+ #     progressRDS$set(message="Loading RDS file into memory.", value=NULL)
+      
       if(! is(temp, "rTResult")) {
         rv$loadStateIndicator <-
-          paste("\"",input$resultRDS$name,"\""," is not a result object.", sep="")
+          paste("\"",isolate(input$resultRDS$name),"\""," is not a result object.", sep="")
         return(NULL)
       }
       
       rv$loadStateIndicator <- NULL
       rv$loadedDataset<- "Dataset successfully loaded from RDS file."
       return(temp)
-    }
+    })
   })
   
   ### Load result from xml
   loadedResultXML <- reactive({
-    if(  input$loadFromXML > 0) {
+    if(  input$loadFromXML > 0) isolate({
       rv$loadStateIndicator <- NULL
       
       ### Test if file was uploaded:
@@ -58,26 +63,34 @@ shinyTandemServer <- function(input, output, session) {
       return(NULL)
       }
       
-      ### Test if file can be read.
-      if( file.access(isolate(input$resultXML$datapath), mode=4) == -1){
-        rv$loadStateIndicator <-
-          paste("File: \"", isolate(input$resultXML$name),"\" cannot be read.")
-        return(NULL)
-      }
-
-      progressXML <- Progress$new(session, min=0, max=1)
-      on.exit(progressXML$close())
-
-      progressXML$set(message="Parsing XML and loading into memory. Please wait as this could take some time...", value=NULL)
+      temp <- tryCatch(
+        expr={
+          GetResultsFromXML(input$resultXML$datapath)
+        },
+        warning=function(w) {
+          rv$loadStateIndicator <-
+            paste("Problem with file: \"", input$resultXML$name, "\" :", w)
+          return(NULL)
+        },
+        error=function(e) {
+          rv$loadStateIndicator <-
+            paste("Problem with file: \"", input$resultXML$name, "\" :", e)
+          return(NULL)
+        }
+      )
+      if( is.null(temp) ) {return(NULL)}
+      
+#      progressXML <- Progress$new(session, min=0, max=1)
+#      on.exit(progressXML$close())
+#      progressXML$set(message="Parsing XML and loading into memory. Please wait as this could take some time...", value=NULL)
     
       ### To-do: put this in a tryCatch structure
-      temp<- isolate(GetResultsFromXML(input$resultXML$datapath))
       rv$loadStateIndicator <- NULL
       rv$loadedDataset<-"Dataset successfully loaded from xml file."
 
-      progressXML$close()
+#     progressXML$close()
       return(temp)
-    }
+    })
   })
 
   ### Load result from R session:
@@ -124,7 +137,7 @@ shinyTandemServer <- function(input, output, session) {
   #######
   output$overviewAnalysis <- renderText({
     if( is.null(rv$result)) {
-      return("Warning: A dataset must be loaded to access analysis overview")
+      return("A dataset must be loaded to access analysis overview")
     }
        
     params <- rv$result@used.parameters
@@ -163,7 +176,7 @@ shinyTandemServer <- function(input, output, session) {
   ### Display protein overview
   output$overviewProteins <- renderText({
    if(is.null(rv$result)){
-     return("Warning: A dataset must be loaded to see the identified proteins")
+     return("A dataset must be loaded to see the identified proteins")
     }
     tableAsHTML(rv$result@proteins[,c(1,2,3,6,7),with=FALSE])
   })
@@ -171,7 +184,7 @@ shinyTandemServer <- function(input, output, session) {
   ### Display protein overview
   output$overviewPeptides <- renderText({
      if(is.null(rv$result)){
-       return("Warning:A dataset must be loaded to see the identified peptides")
+       return("A dataset must be loaded to see the identified peptides")
     }
     tableAsHTML(rv$result@peptides[,c(1,2,3,4,5,9,10,11,12,14,17), with=FALSE])
   })
@@ -183,7 +196,7 @@ shinyTandemServer <- function(input, output, session) {
   ## protein selection dynamic ui:
   output$protSelection <- renderUI({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded to obtain a choice of identified proteins")
+      return("A dataset must be loaded to obtain a choice of identified proteins")
     }
     prots <- subset(rv$result@proteins, expect.value < input$maxExpectProt &
                     num.peptides >= input$minPepNum & like(label, input$protDescFilter))
@@ -194,7 +207,10 @@ shinyTandemServer <- function(input, output, session) {
 
   output$tableSelectedProt <- renderText({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded to obtain a choice of identified proteins")
+      return("A dataset must be loaded to obtain a choice of identified proteins")
+    }
+    if( is.null(input$protSelected) ){
+      return("Select a protein.")
     }
     tableAsHTML(
       subset(
@@ -206,10 +222,10 @@ shinyTandemServer <- function(input, output, session) {
   ### Peptides from selected protein
   output$pepFromSelectProt <- renderText({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded to see peptides")
+      return("A dataset must be loaded to see peptides")
     }
     if(length(input$protSelected)<1){
-      return("Warning: You must select a protein to see the associated peptides.")
+      return("Select a protein.")
     }
     selectProt <- rv$result@proteins$uid[rv$result@proteins$label==input$protSelected[[1]] ]
     tableAsHTML(
@@ -221,10 +237,10 @@ shinyTandemServer <- function(input, output, session) {
   ### Protein coverage
   output$protCoverage <- renderUI({
     if(is.null(rv$result)){
-      return("Warning:A dataset must be loaded to see protein coverage.")
+      return("A dataset must be loaded to see protein coverage.")
     }
     if(length(input$protSelected)<1){
-      return("Warning: You must select a protein to see the protein coverage.")
+      return("Select a protein.")
     }
     selectedProt <- rv$result@proteins[rv$result@proteins$label==input$protSelected[[1]],]
     selectedPep <- as.data.frame(rv$result@peptides[ rv$result@peptides$prot.uid==selectedProt$uid[[1]], ])
@@ -269,12 +285,23 @@ shinyTandemServer <- function(input, output, session) {
   ## Stats section.
   ######
   
-  output$protExpect <- renderPlot({
+  output$protExpectUI <- renderUI({
+    if (is.null(rv$result)) {
+      return("A dataset must be loaded.")
+    }
+    tabsetPanel(
+      tabPanel(title="IDs",
+               plotOutput("protExpect"),
+               helpText("")
+      )
+    )
+  })
 
-    if (is.null(rv$result)) { return(invisible(NULL)) }
+  output$protExpect <- renderPlot({
+    if (is.null(rv$result)) {return(invisible(NULL))}
     prot.e <- sort(-(rv$result@proteins$expect.value), decreasing=TRUE)
     spm.e <- sort(-log10(rv$result@peptides$expect.value), decreasing=TRUE)
-
+    
     xaxis <- max(length(prot.e), length(spm.e))
     yaxis <- max(max(prot.e), max(spm.e))
     plot(
@@ -298,9 +325,11 @@ shinyTandemServer <- function(input, output, session) {
       fill=c("red", "blue", "green"), bty="n"
     )
   })
-  
-   output$chargeDisUI<- renderUI({
-    if (is.null(rv$result)) { return(invisible(NULL)) }
+   
+  output$chargeDisUI<- renderUI({
+    if (is.null(rv$result)) {
+      return("A dataset must be loaded.")
+    }
     tabs <- list()
     ## Find the charges for which there are at least 3 spectra.
     charges <- table(rv$result@peptides$spectrum.z)
@@ -314,10 +343,12 @@ shinyTandemServer <- function(input, output, session) {
             plotOutput(outputId=plotId))
         )
       )
-     }
-     warning(tabs)
-     do.call(tabsetPanel,tabs)
-   })
+    }
+    div(
+    do.call(tabsetPanel,tabs),
+    helpText("NormalMixEM algorithm was used to fit two distributions on the density curve of peptide-spectrum-matches by score.")
+        )
+  })
 
   output$charge1 <- renderPlot({
     plotChargeDis(1)
@@ -357,7 +388,7 @@ shinyTandemServer <- function(input, output, session) {
 
   output$pepProtFilter <- renderUI({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded to filter peptides by protein")
+      return("A dataset must be loaded to filter peptides by protein")
     }
     selectInput("associatedProt", label="Choose by protein:",
                 choices=c("No Filter", rv$result@proteins$label),
@@ -368,7 +399,7 @@ shinyTandemServer <- function(input, output, session) {
 
   output$pepPTMFilter <- renderUI({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded to filter peptides by PTM")
+      return("A dataset must be loaded to filter peptides by PTM")
     }
     choices.ptm <- subset(rv$result@ptm, select=c(type,modified))
     choices.ptm <- apply(choices.ptm, 1, paste, collapse=":")
@@ -383,7 +414,7 @@ shinyTandemServer <- function(input, output, session) {
   ## peptide selection dynamic ui
   output$pepSelection <- renderUI({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded to select peptide.")
+      return("A dataset must be loaded to select peptide.")
     }
     pep.subset <- rv$result@peptides
     
@@ -432,7 +463,7 @@ shinyTandemServer <- function(input, output, session) {
   
   output$tableAssociatedProt <- renderText({
     if(is.null(rv$result)){
-      return("Warning: A peptide must be selected to see associated proteins")
+      return("A peptide must be selected to see associated proteins")
     }
     if ( is.null(input$pepSelected) ){
       return("A peptide must be selected")
@@ -447,7 +478,13 @@ shinyTandemServer <- function(input, output, session) {
 
   output$ms2Spectra <- renderUI({
     if(is.null(rv$result)){
-      return("Warning: A dataset must be loaded.")
+      return("A dataset must be loaded.")
+    }
+    if( ! is(rv$result, "rTResult_s") ){
+      return("Your dataset does not include spectra. To see ms2 spectra, use a result object created with rTANDEM version 1.3.5.")
+    }
+    if( length(rv$result@spectra[[1]]) == 0 ){
+      return("Your dataset does not include any spectra. Make sure that you use a version of rTANDEM >= 1.3.5 and that you export spectra during search (set parameter 'output, spectra' to 'yes') to use this feature.")
     }
     if( is.null(input$pepSelected) ) {
       return("A peptide must be selected.")
@@ -464,14 +501,13 @@ shinyTandemServer <- function(input, output, session) {
         }
       )
     do.call(tabsetPanel, spectra.tabs)
-
   })
 
   ### Generate arbitrary number of ouput$spectra# variables.
   ### To Do: Find a way to bypass the 'eval(parse(paste...)))' syntax
   observe({
+    if( ! is(rv$result, "rTResult_s") ){ return(NULL) }
     spectra <- NULL
-    warning("is null? :", is.null(input$pepSelected))
     if( ! is.null(input$pepSelected) ){
       spectra <- unique(subset(rv$result@peptides,
                                sequence==input$pepSelected,
@@ -485,5 +521,4 @@ shinyTandemServer <- function(input, output, session) {
       ## output$spectra1 <- renderPlot(ms2.plot(spectra, rv$result))
     }
   })
- 
 } ##/shinyServer
