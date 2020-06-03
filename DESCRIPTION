@@ -1,7 +1,7 @@
 Package: shinyTANDEM
 Type: Package
 Title: Provides a GUI for rTANDEM
-Version: 1.27.0
+Version: 1.27.1
 Date: 2013-12-18
 Author@R: c(person("Frederic", "Fournier",
         email="frederic.fournier@crchuq.ulaval.ca"), person("Arnaud", 
@@ -12,3 +12,4 @@ Description: This package provides a GUI interface for rTANDEM. The GUI is prima
 biocViews: ImmunoOncology, MassSpectrometry, Proteomics
 License: GPL-3
 Depends: rTANDEM (>= 1.3.5), shiny, mixtools, methods, xtable
+PackageStatus: Deprecated
